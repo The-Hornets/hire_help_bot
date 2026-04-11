@@ -1,0 +1,16 @@
+GEM
+  remote: https://rubygems.org/
+  specs:
+    vk_cozy (0.3.9)
+
+PLATFORMS
+  x64-mingw-ucrt
+
+DEPENDENCIES
+  vk_cozy
+
+CHECKSUMS
+  vk_cozy (0.3.9) sha256=4d1051c282acbcd8598e33db17b4eeebde7a11998b30e8ae9f1fc53e0f33bc9a
+
+BUNDLED WITH
+  4.0.9
