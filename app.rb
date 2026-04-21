@@ -1,14 +1,14 @@
 require 'sinatra'
-require 'httparty'
 require 'json'
 require 'dotenv/load'
-require 'securerandom'
+require_relative 'store'
+require_relative 'bot'
+require 'thread'
 
 # === КОНФИГУРАЦИЯ ===
 VK_TOKEN      = ENV['VK_ACCESS_TOKEN']
 VK_GROUP_ID   = ENV['VK_GROUP_ID']
 VK_CONFIRM    = ENV['VK_CONFIRMATION_CODE']
-VK_API_V      = '5.199'
 
 # Проверка при старте
 abort("❌ Нет VK_ACCESS_TOKEN!") unless VK_TOKEN
@@ -17,48 +17,29 @@ abort("❌ Нет VK_CONFIRMATION_CODE!") unless VK_CONFIRM
 
 puts "✅ Бот запущен! Группа: #{VK_GROUP_ID}"
 
-# === ОТПРАВКА СООБЩЕНИЙ (ИСПРАВЛЕНО) ===
-def vk_send_message(peer_id, text)
-  puts "📤 Отправка в #{peer_id}: #{text[0..30]}..."
+PROCESSED_EVENTS = {}
+PROCESSED_EVENTS_MUTEX = Mutex.new
+EVENT_TTL_SECONDS = 600
+PEER_DISPATCH_LOCKS = Hash.new { |h, k| h[k] = Mutex.new }
 
-  random_id = begin
-    # Основной вариант: случайный int64 в допустимом диапазоне VK.
-    SecureRandom.random_number((2**63) - 1)
-  rescue => e
-    # Fallback для редких platform-specific проблем с random_number/int.
-    puts "⚠️ random_id fallback: #{e.class} - #{e.message}"
-    Time.now.to_i
+def with_peer_lock(peer_id, &block)
+  return yield if peer_id.nil?
+
+  PEER_DISPATCH_LOCKS[peer_id].synchronize(&block)
+end
+
+def duplicate_event?(event_id)
+  return false if event_id.to_s.strip.empty?
+
+  now = Time.now.to_i
+  PROCESSED_EVENTS_MUTEX.synchronize do
+    # очищаем старые записи, чтобы кэш не рос бесконечно
+    PROCESSED_EVENTS.delete_if { |_id, ts| (now - ts) > EVENT_TTL_SECONDS }
+    return true if PROCESSED_EVENTS.key?(event_id)
+
+    PROCESSED_EVENTS[event_id] = now
+    false
   end
-
-  payload = {
-    access_token: VK_TOKEN,
-    v: VK_API_V,
-    peer_id: peer_id,
-    message: text,
-    random_id: random_id
-  }
-
-  # HTTParty автоматически превратит хеш в form-urlencoded, если не указывать JSON
-  response = HTTParty.post('https://api.vk.com/method/messages.send', body: payload)
-  parsed = response.parsed_response
-
-  puts "📬 VK status: #{response.code}"
-  puts "📬 VK body: #{parsed}"
-
-  result = parsed['response']
-
-  if result.is_a?(Integer)
-    puts "✅ Успех! Message ID: #{result}"
-  elsif result.is_a?(Hash) && result['message_id']
-    puts "✅ Успех! Message ID: #{result['message_id']}"
-  else
-    # Показываем реальную ошибку от ВК
-    error_info = parsed['error'] || parsed
-    puts "❌ ОШИБКА ВК: #{error_info}"
-  end
-rescue => e
-  puts "💥 КРИТИЧЕСКАЯ ОШИБКА: #{e.class} - #{e.message}"
-  puts e.backtrace.first(3).join("\n")
 end
 
 # === НАСТРОЙКИ СЕРВЕРА ===
@@ -72,6 +53,8 @@ configure do
       '.tuna.am'
     ]
   }
+
+  Store.bootstrap!
 end
 
 get '/' do
@@ -83,8 +66,7 @@ end
 post '/webhook' do
   content_type 'text/plain'
   raw_body = request.body.read
-  request.body.rewind
-  
+
   # Лог входящего (для отладки)
   puts "\n📥 ВХОД: #{raw_body[0..200]}..." 
 
@@ -101,9 +83,15 @@ post '/webhook' do
     return VK_CONFIRM
 
   when 'message_new'
+    event_id = data['event_id'].to_s
+    if duplicate_event?("mn:#{event_id}")
+      puts "♻️ Пропуск дубликата события event_id=#{event_id}"
+      return 'ok'
+    end
+
     puts "💬 Новое сообщение"
     msg = data.dig('object', 'message')
-    
+
     # Игнорируем исходящие сообщения (чтобы бот не отвечал сам себе)
     return 'ok' if msg && msg['out'] == 1
 
@@ -113,24 +101,25 @@ post '/webhook' do
     end
 
     peer_id = msg['peer_id']
-    text = msg['text']
+    raw_text = msg['text']
+    has_doc = msg['attachments'].to_a.any? { |a| a['type'] == 'doc' }
 
     if peer_id.nil?
       puts "⚠️ Нет peer_id в message_new"
       return 'ok'
     end
 
-    if text.nil?
-      puts "⚠️ Нет text в message_new"
-      return 'ok'
+    # Пустое сообщение без вложения: VK иногда шлёт лишние апдейты; в тренировке это давало «ответ сам себе».
+    if raw_text.nil? || raw_text.to_s.strip.empty?
+      unless has_doc
+        puts '⚠️ Пустой текст без документа — пропуск'
+        return 'ok'
+      end
     end
 
-    text = text.strip
+    text = raw_text.to_s.strip
     puts "👤 User #{msg['from_id']}: '#{text}'"
-    
-    # Логика эха
-    answer = text.empty? ? "👋 Привет!" : "🔁 Вы написали: #{text}"
-    vk_send_message(peer_id, answer)
+    with_peer_lock(peer_id) { Bot.dispatch(msg) }
   end
 
   'ok'
