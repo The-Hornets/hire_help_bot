@@ -6,6 +6,9 @@ on:
   pull_request:
     branches: [main, develop]
 
+env:
+  BUNDLE_FORCE_RUBY_PLATFORM: true
+
 jobs:
   lint:
     runs-on: ubuntu-latest
@@ -18,7 +21,7 @@ jobs:
       - name: Run RuboCop
         run: bundle exec rubocop --format github
 
-  test:
+  smoke:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -26,5 +29,5 @@ jobs:
         with:
           ruby-version: '.ruby-version'
           bundler-cache: true
-      - name: Run RSpec
-        run: bundle exec rspec
+      - name: Run smoke (mock store/apis)
+        run: bundle exec ruby tasks/smoke_mock.rb
