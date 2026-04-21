@@ -72,4 +72,4 @@ CREATE INDEX IF NOT EXISTS idx_questions_category_id ON questions(category_id);
 CREATE INDEX IF NOT EXISTS idx_attempts_user_id ON attempts(user_id);
 CREATE INDEX IF NOT EXISTS idx_attempts_created_at ON attempts(created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_sessions_user_id_mode_status ON sessions(user_id, mode, status);
-CREATE INDEX IF NOT EXISTS idx_interview_turns_session_id 
+CREATE INDEX IF NOT EXISTS idx_interview_turns_session_id ON interview_turns(session_id);
