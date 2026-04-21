@@ -1,0 +1,9 @@
+inherit_from: .rubocop_todo.yml
+
+AllCops:
+  NewCops: disable
+  TargetRubyVersion: 3.3
+
+# Match Linux CI and avoid Windows-native CRLF vs LF noise on `tasks/smoke_mock.rb`.
+Layout/EndOfLine:
+  EnforcedStyle: lf
